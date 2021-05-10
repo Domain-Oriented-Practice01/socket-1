@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+  <head>
+      <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0">
+      <title>Spring Boot WebSocket Chat Application | CalliCoder</title>
+      <link rel="stylesheet" href="/css/main.css" />
+      <script src="js/jquery.js"></script>
+      <script src="js/sockjs.min.js"></script>
+      <script src="js/stomp.js"></script>
+  </head>
+  <body>
+    <noscript>
+      <h2>Sorry! Your browser doesn't support Javascript</h2>
+    </noscript>
+
+    <div id="username-page">
+        <div class="username-page-container">
+            <h1 class="title">聊天室测试</h1>
+            <form id="usernameForm" name="usernameForm">
+                <div class="form-group">
+                    <input type="text" id="name" placeholder="Username" autocomplete="off" class="form-control" />
+                </div>
+                <div class="form-group">
+                    <button type="submit" class="accent username-submit">进入消息接收室</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="chat-page" class="hidden">
+        <form id="refreshUserForm" name="refreshUserForm">
+            <div>
+                <button type="submit" class="primary" id="refreshusers">RefreshUser</button>
+                <p id="users"></p>
+            </div>
+        </form>
+        <div class="chat-container">
+            <div class="chat-header">
+                <h2>聊天测试</h2>
+            </div>
+            <div id="connecting" class="connecting">Connecting...</div>
+            <ul id="messageArea"></ul>
+            <form id="messageForm" name="messageForm" nameForm="messageForm">
+                <div class="form-group">
+                    <div class="input-group clearfix">
+                        <input type="text" id="SendTo" placeholder="Send To..."/>
+                        <input type="text" id="message" placeholder="Type a message..." autocomplete="off" class="form-control"/>
+                        <button type="submit" class="primary">Send</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+  </body>
+  
+<script>
+    var usernamePage = document.querySelector('#username-page');
+    var chatPage = document.querySelector('#chat-page');
+    var refreshUserForm = document.querySelector('#refreshUserForm')
+    var usernameForm = document.querySelector('#usernameForm');
+    var messageForm = document.querySelector('#messageForm');
+    var messageSendTo = document.querySelector('#SendTo');
+    var messageInput = document.querySelector('#message');
+    var messageArea = document.querySelector('#messageArea');
+    var connectingElement = document.querySelector('#connecting');
+    
+    var stompClient = null;
+    var username = null;
+
+    var colors = [
+        '#2196F3', '#32c787', '#00BCD4', '#ff5652',
+        '#ffc107', '#ff85af', '#FF9800', '#39bbb0'
+    ];
+
+    function connect(event) {
+        username = document.querySelector('#name').value.trim();
+
+        if(username) {
+            // 从登录界面到聊天界面
+            usernamePage.classList.add('hidden');
+            chatPage.classList.remove('hidden');
+            // 连接服务端
+            var socket = new SockJS('/ws');
+            stompClient = Stomp.over(socket);
+            stompClient.connect({'username': username}, onConnected, onError);
+        }
+        event.preventDefault();
+    }
+
+    function onConnected() {
+        // 订阅 Public Topic
+        stompClient.subscribe('/topic/public', onMessageReceived);
+
+        //额外订阅了msg频道,暂时当做自己的频道,别人需要特意往这个频道发送消息,才能完成 ‘单对单’
+        stompClient.subscribe('/user/topic/msg', onMessageReceived);
+        
+        stompClient.send("/app/chat/addUser",
+            {},
+            JSON.stringify({sender: username, type: 'JOIN',to: 'all'})
+        )
+        connectingElement.classList.add('hidden');
+    }
+
+    function onError(error) {
+        connectingElement.textContent = '无法成功连接！';
+        connectingElement.style.color = 'red';
+    }
+
+    function sendMessage(event) {
+        var messageContent = messageInput.value.trim();
+        if(messageContent && stompClient) {
+            // 群发消息
+            if(messageSendTo.value == '' || messageSendTo.value == 'all'){
+                var chatMessage = {
+                    sender: username,
+                    content: messageInput.value,
+                    type: 'CHAT',
+                    to: 'all'
+                };
+                stompClient.send("/app/chat/sendMessageAll", {}, JSON.stringify(chatMessage));
+            }else{
+            // 私发消息    
+                var chatMessage = {
+                    sender: username,
+                    content: messageInput.value,
+                    type: 'CHAT',
+                    to: messageSendTo.value
+                };
+                stompClient.send("/app/chat/sendMessageAlone", {}, JSON.stringify(chatMessage));
+            }
+            messageInput.value = '';
+        }
+        event.preventDefault();
+    }
+    
+    function onMessageReceived(payload) {
+        var message = JSON.parse(payload.body);
+        var messageElement = document.createElement('li');
+
+        if(message.type == 'SYSTEM'){
+            var users = message.content;
+            $("#users").html(users);
+        }else{
+            if(message.type === 'JOIN') {
+                messageElement.classList.add('event-message');
+                message.content = message.sender + ' 上线~!';
+            } else if (message.type === 'LEAVE') {
+                messageElement.classList.add('event-message');
+                message.content = message.sender + ' 离线了!';
+            } else {
+                messageElement.classList.add('chat-message');
+
+                var avatarElement = document.createElement('i');
+                var avatarText = document.createTextNode(message.sender[0]);
+                avatarElement.appendChild(avatarText);
+                avatarElement.style['background-color'] = getAvatarColor(message.sender);
+
+                messageElement.appendChild(avatarElement);
+
+                var usernameElement = document.createElement('span');
+                var usernameText = document.createTextNode(message.sender);
+                usernameElement.appendChild(usernameText);
+                messageElement.appendChild(usernameElement);
+            }
+            var textElement = document.createElement('p');
+            var messageText = document.createTextNode('消息：'+message.content);
+
+            textElement.appendChild(messageText);
+            messageElement.appendChild(textElement);
+
+            messageArea.appendChild(messageElement);
+            messageArea.scrollTop = messageArea.scrollHeight;
+        }
+    }
+
+    function getAvatarColor(messageSender) {
+        var hash = 0;
+        for (var i = 0; i < messageSender.length; i++) {
+            hash = 31 * hash + messageSender.charCodeAt(i);
+        }
+        var index = Math.abs(hash % colors.length);
+        return colors[index];
+    }
+
+    function refreshUser(event) {
+        if(stompClient) {
+            var chatMessage = {
+                sender: username,
+                content: "refresh",
+                type: 'SYSTEM',
+                to: username
+            };
+            stompClient.send("/app/chat/sendMessageTest", {}, JSON.stringify(chatMessage));
+        }
+        event.preventDefault();
+    }
+    
+    usernameForm.addEventListener('submit', connect, true)
+    messageForm.addEventListener('submit', sendMessage, true)
+    refreshUserForm.addEventListener('submit',refreshUser,true)
+
+    window.onbeforeunload=function(){
+        var chatMessage = {
+            sender: username,
+            content: "",
+            type: 'LEAVE',
+            to: "all"
+        };
+        //跳转页面或刷新页面
+        if(document.all){
+            if(event.clientY < 0){
+                stompClient.send("/app/chat/sendMessageAll", {}, JSON.stringify(chatMessage));
+            }
+        }else{
+            stompClient.send("/app/chat/sendMessageAll", {}, JSON.stringify(chatMessage));
+        }
+    }
+    
+</script>
+</html>
